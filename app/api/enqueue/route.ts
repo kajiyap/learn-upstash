@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   }
 
   await client.queue({ queueName }).upsert({
-    parallelism: 2,
+    parallelism: 1,
   });
 
   const workerUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/worker`;
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
   for (let i = 0; i < quantity; i++) {
     jobs.push(
-      client.publishJSON({
+      client.queue({ queueName: queueName }).enqueueJSON({
         url: workerUrl,
         body: {
           index: i,
@@ -34,12 +34,6 @@ export async function POST(req: NextRequest) {
           checkoutData,
         },
         retries: 3,
-        flowControl: {
-          key: "clicksign-worker",
-          rate: 2,
-          period: '10s',
-          parallelism:2,
-        }
       })
     );
   }
