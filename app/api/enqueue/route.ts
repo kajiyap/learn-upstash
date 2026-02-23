@@ -1,53 +1,69 @@
-import { Client } from "@upstash/qstash";
 import { NextRequest, NextResponse } from "next/server";
+import { validateCheckoutData } from "@/app/lib/checkout";
+import { enqueueOrderBatch } from "@/app/lib/queue";
+import { estimateDispatchWindowMs, formatDuration, getQueueConfig } from "@/app/lib/queue-config";
+import { createOrder } from "@/app/lib/store";
 
-const client = new Client({
-  token: process.env.QSTASH_TOKEN!,
-});
-
-const queueName = "fila-rate-limit-test";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  const { quantity, checkoutData } = await req.json();
+  try {
+    const { quantity, checkoutData, productId, offerId } = await req.json();
+    const parsedData = validateCheckoutData(checkoutData);
+    const total = Number(quantity);
 
-  if (!checkoutData) {
-    return NextResponse.json(
-      { success: false, error: "checkoutData é obrigatório" },
-      { status: 400 }
-    );
-  }
+    if (!Number.isInteger(total) || total < 1 || total > 100) {
+      return NextResponse.json(
+        { success: false, error: "quantity deve ser um inteiro entre 1 e 100" },
+        { status: 400 }
+      );
+    }
 
-  await client.queue({ queueName }).upsert({
-    parallelism: 2,
-  });
+    const orders = Array.from({ length: total }).map((_, index) => {
+      const emailSuffix = total === 1 ? "" : `+lote${index + 1}`;
+      const [localPart, domainPart = "email.com"] = parsedData.email.split("@");
 
-  const workerUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/worker`;
-  const jobs = [];
-
-  for (let i = 0; i < quantity; i++) {
-    jobs.push(
-      client.publishJSON({
-        url: workerUrl,
-        body: {
-          index: i,
-          createdAt: Date.now(),
-          checkoutData,
+      return createOrder({
+        checkoutData: {
+          ...parsedData,
+          email: `${localPart}${emailSuffix}@${domainPart}`,
         },
-        retries: 3,
-        flowControl: {
-          key: "clicksign-worker",
-          rate: 2,
-          period: '10s',
-          parallelism:2,
-        }
-      })
+        productId: typeof productId === "string" ? productId : undefined,
+        offerId: typeof offerId === "string" ? offerId : undefined,
+      });
+    });
+
+    const queueConfig = getQueueConfig();
+    const dispatchWindowMs = estimateDispatchWindowMs(total, queueConfig);
+    const runFlowKey = `${queueConfig.flowKey}-batch-${Date.now()}`;
+    console.log(
+      `[ENQUEUE] total=${total} flowRate=${queueConfig.flowRate}/${queueConfig.flowPeriod} flowParallelism=${queueConfig.flowParallelism} retries=${queueConfig.retries} flowKey=${runFlowKey} estimated_dispatch_window=${formatDuration(dispatchWindowMs)}`
+    );
+
+    await enqueueOrderBatch({
+      orderIds: orders.map((order) => order.id),
+      flowKeyOverride: runFlowKey,
+    });
+
+    return NextResponse.json({
+      success: true,
+      enqueued: total,
+      orderIds: orders.map((order) => order.id),
+      flowKey: runFlowKey,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Falha ao enfileirar pedidos";
+    const isValidationError =
+      typeof message === "string" &&
+      (message.includes("invalido") || message.includes("obrigatorio") || message.includes("quantity"));
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: message,
+      },
+      { status: isValidationError ? 400 : 500 }
     );
   }
 
-  await Promise.all(jobs);
-
-  return NextResponse.json({
-    success: true,
-    enqueued: quantity,
-  });
 }

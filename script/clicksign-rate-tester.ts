@@ -1,4 +1,5 @@
-﻿/**
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars */
+/**
  * Clicksign rate tester - FLUXO REAL DA APLICACAO
  *
  * Espelha exatamente o fluxo de checkout-with-progress.ts:
@@ -12,11 +13,12 @@
  */
 
 import process from "process";
+import "dotenv/config";
 
 // --- CONFIGURACAO ---------------------------------------------------------------
-const TOKEN       = "af73e5a2-6ef3-4826-b865-0d04616e22a9";
-const BASE_URL    = "https://sandbox.clicksign.com/api/v3";
-const TEMPLATE_ID = "f06530f4-1512-4ae2-85cf-b5cd5391ff4f"; // copie CLICKSIGN_TEMPLATE_ID do .env
+const TOKEN       = process.env.CLICKSIGN_TOKEN ?? "";
+const BASE_URL    = process.env.CLICKSIGN_BASE_URL ?? "https://sandbox.clicksign.com/api/v3";
+const TEMPLATE_ID = process.env.CLICKSIGN_TEMPLATE_ID ?? "";
 
 // Quantas vezes rodar o fluxo completo.
 // Aumente REPEAT para descobrir em qual iteracao comeca o 429.
@@ -208,6 +210,12 @@ async function clicksignCreateCompleteEnvelope(
   });
   console.log(`    envelope activated: OK`);
 
+  // 7. Disparar notificação por email ao signatário
+  await apiPost(`/envelopes/${envelopeId}/notifications`, {
+    data: { type: "notifications", attributes: { message: "" } },
+  });
+  console.log(`    notification sent: OK`);
+
   return { envelopeId, documentId, signerId };
 }
 
@@ -299,8 +307,8 @@ async function main() {
   console.log(`  Iteracoes: ${REPEAT}`);
   console.log("");
 
-  if (TEMPLATE_ID === "f06530f4-1512-4ae2-85cf-b5cd5391ff4f") {
-    console.error("ERRO: Configure TEMPLATE_ID no topo do script antes de rodar!");
+  if (!TOKEN || !TEMPLATE_ID) {
+    console.error("ERRO: Configure CLICKSIGN_TOKEN e CLICKSIGN_TEMPLATE_ID no .env.local!");
     process.exit(1);
   }
 
